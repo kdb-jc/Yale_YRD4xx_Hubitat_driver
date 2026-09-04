@@ -37,7 +37,7 @@ def getDriverVersion() { return "1.06" }	// **** DEVICE DRIVER VERSION.
 */
 
 metadata {
-    definition (name: "Yale Assure Lock 2", namespace: "Sleuth255", author: "Trunzoc/Sleuth") {
+    definition (name: "Yale Assure Lock 2 Custom", namespace: "Sleuth255", author: "Trunzoc/Sleuth") {
         capability "Actuator"
         capability "Lock"
         capability "LockCodes"
