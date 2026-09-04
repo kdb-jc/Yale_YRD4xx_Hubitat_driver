@@ -33,6 +33,7 @@ def getDriverVersion() { return "1.06" }	// **** DEVICE DRIVER VERSION.
  *          differentiate keypad vs fingerprint unlocks via v1 alarm type, and record (best guess) last code name for fingerprint
  *          handle several more Access Control notifications (auto-lock, jam, etc.), and tag lock events with physical/digital
  *          clean up handling of open/close notifications
+ *          add data map to notification event to trigger "Lock code entered" in RM
 */
 
 metadata {
@@ -188,16 +189,16 @@ def zwaveEvent(NotificationReport cmd) {
                 def codeName = getCodeName(slotId)
                 map.value = "unlocked"
                 map.type = "physical"
+                map.data = [(slotId.toString()): [name: codeName]]
                 // On at least some ZW3 variants, Yale reports both keypad and fingerprint unlocks
                 // as event 0x06 with identical event parameters, only distinguishing them in the
                 // legacy v1 alarm type.
                 if (cmd?.v1AlarmType == 0x91) {
-                    map.descriptionText = "${device.displayName} unlocked by Fingerprint match"
+                    map.descriptionText = "${device.displayName} unlocked by ${codeName} via fingerprint"
                 } else { // Keypad match observed as 0x13 but just defaulting here
-                    map.descriptionText = "${device.displayName} unlocked by ${codeName}"
+                    map.descriptionText = "${device.displayName} unlocked by ${codeName} via keypad"
                 }
-				sendEvent(name: "lastCodeName", value: codeName)
-				state.remove("lastCodeName")
+                sendEvent(name: "lastCodeName", value: codeName)
                 break
             case 0x09: // Auto Lock
                 map.value = "locked"
