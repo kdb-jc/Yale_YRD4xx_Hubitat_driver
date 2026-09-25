@@ -1,8 +1,8 @@
-def getDriverVersion() { return "1.06" }	// **** DEVICE DRIVER VERSION.
+def getDriverVersion() { return "1.07" }	// **** DEVICE DRIVER VERSION.
 /* 
  * 	Yale Assure Lock 2
  *
- *   Version 1.06
+ *   Version 1.07
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -34,6 +34,8 @@ def getDriverVersion() { return "1.06" }	// **** DEVICE DRIVER VERSION.
  *          handle several more Access Control notifications (auto-lock, jam, etc.), and tag lock events with physical/digital
  *          clean up handling of open/close notifications
  *          add data map to notification event to trigger "Lock code entered" in RM
+ *  v1.07   Z-Wave JS: ignore "Opening state" updates (arrived as event 1, a phantom lock on every door open)
+ *          Z-Wave JS: read the user slot from eventParameter[0] when there's no embedded User Code Report
 */
 
 metadata {
@@ -106,6 +108,17 @@ private Map getCommandClassVersions() {
 // --- Core Z-Wave Parsing ---
 def parse(String description) {
 	if (traceEnable) log.trace "parse(String description): ${description}"
+    // Z-Wave JS reports each Access Control state variable as its own value update, and the hub
+    // rebuilds a NotificationReport with event = the state's value. "Door state" values are real
+    // event codes (22/23), but "Opening state" is 0/1 (closed/open), so every door open arrived as
+    // event 1 (Manual Lock). Door state already covers open/close, so drop Opening state entirely.
+    if (description.startsWith("{")) {
+        def json = parseJson(description)
+        if (json.cc == 113 && json.values?.any { it.propertyKey == "Opening state" }) {
+            if (debugEnable) log.debug "Ignoring Z-Wave JS 'Opening state' update (duplicates Door state)"
+            return null
+        }
+    }
     def result = null
     def cmd = zwave.parse(description, commandClassVersions)
     if (cmd) {
@@ -185,14 +198,19 @@ def zwaveEvent(NotificationReport cmd) {
                 map.descriptionText = "${device.displayName} was locked via keypad"
                 break
             case 0x06: // Keypad or Fingerprint Unlock (With User Data)
-                def slotId = cmd.eventParameter[2]
+                // Old stack: embedded User Code Report [0x63, 0x03, slot, status, code...] -> slot at [2].
+                // Z-Wave JS: the hub passes parameters.userId through as a single byte -> slot at [0].
+                // (eventParametersLength is not kept consistent with eventParameter, so don't use it.)
+                def params = cmd.eventParameter
+                def slotId = (params?.size() >= 3 && params[0] == 0x63 && params[1] == 0x03) ? params[2] : params?.getAt(0)
                 def codeName = getCodeName(slotId)
                 map.value = "unlocked"
                 map.type = "physical"
                 map.data = [(slotId.toString()): [name: codeName]]
                 // On at least some ZW3 variants, Yale reports both keypad and fingerprint unlocks
                 // as event 0x06 with identical event parameters, only distinguishing them in the
-                // legacy v1 alarm type.
+                // legacy v1 alarm type. Z-Wave JS doesn't pass the v1 alarm type through (it's always 0),
+                // so there both read as keypad.
                 if (cmd?.v1AlarmType == 0x91) {
                     map.descriptionText = "${device.displayName} unlocked by ${codeName} via fingerprint"
                 } else { // Keypad match observed as 0x13 but just defaulting here
