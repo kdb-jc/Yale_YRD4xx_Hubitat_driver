@@ -36,6 +36,8 @@ def getDriverVersion() { return "1.07" }	// **** DEVICE DRIVER VERSION.
  *          add data map to notification event to trigger "Lock code entered" in RM
  *  v1.07   Z-Wave JS: ignore "Opening state" updates (arrived as event 1, a phantom lock on every door open)
  *          Z-Wave JS: read the user slot from eventParameter[0] when there's no embedded User Code Report
+ *          log lock operations from the notification; lock status reports log at info only when they change state
+ *          Z-Wave JS: drop repeated door open/close events (Door state is re-sent 2-3 times per open/close)
 */
 
 metadata {
@@ -159,7 +161,14 @@ def zwaveEvent(DoorLockOperationReport cmd) {
         map.value = "unlocked"
         map.descriptionText = "${device.displayName} was unlocked"
     }
-    if (txtEnable) log.info map.descriptionText
+    // The Access Control notification that precedes this report already logged the operation in
+    // detail, and Z-Wave JS also tends to deliver this report twice. So only log at info when this
+    // report is what actually changes the lock state (e.g. the notification was lost in transit).
+    if (device.currentValue("lock") != map.value) {
+        if (txtEnable) log.info map.descriptionText
+    } else if (debugEnable) {
+        log.debug map.descriptionText
+    }
     sendEvent(map)
 }
 
@@ -247,23 +256,33 @@ def zwaveEvent(NotificationReport cmd) {
                 map.type = "physical"
                 map.descriptionText = "${device.displayName} unlocked by Fingerprint match"
                 break
+            // Z-Wave JS re-sends the current Door state whenever other Notification values change
+            // (e.g. alarmType/alarmLevel on a lock operation), and sometimes delivers it twice, so the
+            // same door state arrives 2-3 times per open/close. Contact is a state, so let Hubitat drop
+            // repeats (no isStateChange) and only log when the value actually changes.
             case 0x16: // Door Opened
                 map.name = "contact"
                 map.value = "open"
                 map.descriptionText = "${device.displayName} was opened"
-                if (txtEnable) log.info map.descriptionText
+                map.remove("isStateChange")
+                if (txtEnable && device.currentValue("contact") != map.value) log.info map.descriptionText
                 break;
             case 0x17: // Door Closed
                 map.name = "contact"
                 map.value = "closed"
                 map.descriptionText = "${device.displayName} was closed"
-                if (txtEnable) log.info map.descriptionText
+                map.remove("isStateChange")
+                if (txtEnable && device.currentValue("contact") != map.value) log.info map.descriptionText
                 break
             default:
                 log.info "Unknown event ${cmd.event} param0: ${cmd.eventParameter[0]} param1: ${cmd.eventParameter[1]}  param2: ${cmd.eventParameter[2]}"
                 break
         }
-        if (map.value) sendEvent(map)
+        if (map.value) {
+            // Lock events log here; contact events log in their own cases, and jams already warned.
+            if (map.name == "lock" && map.value != "unknown" && txtEnable) log.info map.descriptionText
+            sendEvent(map)
+        }
     }
 }
 
