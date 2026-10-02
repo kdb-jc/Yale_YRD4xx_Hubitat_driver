@@ -38,6 +38,8 @@ def getDriverVersion() { return "1.07" }	// **** DEVICE DRIVER VERSION.
  *          Z-Wave JS: read the user slot from eventParameter[0] when there's no embedded User Code Report
  *          log lock operations from the notification; lock status reports log at info only when they change state
  *          Z-Wave JS: drop repeated door open/close events (Door state is re-sent 2-3 times per open/close)
+ *          treat the lock's "code deleted" notification as confirmation of a delete we initiated, instead of
+ *          waiting on a read-back (which on a slow link made Lock Code Manager retry the delete several times)
 */
 
 metadata {
@@ -241,6 +243,25 @@ def zwaveEvent(NotificationReport cmd) {
                 log.warn map.descriptionText
                 break
             case 0x0D: // Code Deleted
+                // The lock sends this after it has cleared the slot, so for a delete we initiated it IS the
+                // confirmation: drop the slot now rather than waiting on a read-back that, on a slow link,
+                // arrives after Lock Code Manager has already started retrying the delete. Z-Wave JS doesn't
+                // pass this event's slot through (eventParameter is empty), so the slot comes from the pending
+                // delete that deleteCode() recorded. A delete we didn't initiate falls back to reading the
+                // slot back, which is safe even if state.slotId is stale.
+                def pending = state.pendingDelete
+                if (pending && now() - (pending.at as Long) < 120000) {
+                    def deletedSlot = pending.slot
+                    state.remove("pendingDelete")
+                    def codes = loadLockCodes()
+                    if (codes.containsKey(deletedSlot)) {
+                        codes.remove(deletedSlot)
+                        updateLockCodes(codes)
+                        sendEvent(name: "codeChanged", value: "${deletedSlot} deleted", descriptionText: "Code position ${deletedSlot} deleted", isStateChange: true)
+                    }
+                    if (txtEnable) log.info "${device.displayName} deleted lockcode ${deletedSlot}"
+                    return
+                }
                 def slotId = state.slotId
                 if (txtEnable) log.info "${device.displayName} deleting lockcode ${slotId}..."
                 executeCommand(zwaveSecureEncap(zwave.userCodeV1.userCodeGet(userIdentifier: slotId)))
@@ -355,6 +376,8 @@ def deleteCode(codePosition) {
 	if (traceEnable) log.trace "deleteCode(codePosition): ${codePosition}"
     log.info "deleting code ${codePosition}"
     state.slotId = codePosition
+    // Lets the "code deleted" notification (event 0x0D) be trusted as confirmation for this slot.
+    state.pendingDelete = [slot: codePosition.toString(), at: now()]
     executeCommand(zwaveSecureEncap(zwave.userCodeV1.userCodeSet(userIdentifier: codePosition, userIdStatus: 0)))
 }
 
@@ -457,6 +480,7 @@ def configure() {
 def initialize() {
     state.DriverVersion = getDriverVersion()
     state.slotId = 0
+    state.remove("pendingDelete")
 
     //detect zwave module that's installed
     def firstChar = getZWaveDeviceId().take(1) // or myString[0]
