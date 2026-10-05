@@ -40,6 +40,7 @@ def getDriverVersion() { return "1.07" }	// **** DEVICE DRIVER VERSION.
  *          Z-Wave JS: drop repeated door open/close events (Door state is re-sent 2-3 times per open/close)
  *          treat the lock's "code deleted" notification as confirmation of a delete we initiated, instead of
  *          waiting on a read-back (which on a slow link made Lock Code Manager retry the delete several times)
+ *          report doorLockMode 0xFE (bolt position unknown) as "unknown" rather than "unlocked"
 */
 
 metadata {
@@ -159,6 +160,11 @@ def zwaveEvent(DoorLockOperationReport cmd) {
     if (cmd.doorLockMode == 0xFF) {
         map.value = "locked"
         map.descriptionText = "${device.displayName} was locked"
+    } else if (cmd.doorLockMode == 0xFE) {
+        // 0xFE means the lock doesn't know the bolt position (e.g. jammed or mid-travel), so it must
+        // not be reported as unlocked.
+        map.value = "unknown"
+        map.descriptionText = "${device.displayName} reports an unknown lock state"
     } else {
         map.value = "unlocked"
         map.descriptionText = "${device.displayName} was unlocked"
